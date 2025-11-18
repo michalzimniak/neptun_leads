@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, session, redirect, url_for
+from flask import Flask, render_template, request, jsonify, session, redirect, url_for, send_from_directory
 from flask_cors import CORS
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -6,6 +6,7 @@ import sqlite3
 import json
 from datetime import datetime
 import secrets
+import os
 
 app = Flask(__name__)
 app.secret_key = secrets.token_hex(32)
@@ -104,11 +105,26 @@ def init_db():
         except sqlite3.OperationalError:
             pass
         
+        # Add no_prospects column if it doesn't exist (migration)
+        try:
+            conn.execute('ALTER TABLE lead_data ADD COLUMN no_prospects INTEGER DEFAULT 0')
+        except sqlite3.OperationalError:
+            pass
+        
         conn.commit()
 
 @app.route('/')
 def index():
     return render_template('index.html')
+
+# PWA routes
+@app.route('/manifest.json')
+def manifest():
+    return send_from_directory('static', 'manifest.json', mimetype='application/manifest+json')
+
+@app.route('/sw.js')
+def service_worker():
+    return send_from_directory('static', 'sw.js', mimetype='application/javascript')
 
 # ============== AUTH ENDPOINTS ==============
 

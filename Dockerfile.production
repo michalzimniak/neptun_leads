@@ -18,6 +18,9 @@ RUN pip install --no-cache-dir -r requirements.txt && \
 # Skopiuj aplikację
 COPY . .
 
+# Wygeneruj ikony PWA jeśli nie istnieją
+RUN python generate_icons.py || true
+
 # Utwórz użytkownika bez uprawnień root
 RUN useradd -m -u 1000 appuser && \
     chown -R appuser:appuser /app

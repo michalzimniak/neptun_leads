@@ -2,8 +2,18 @@
 <html lang="pl">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Neptun LEADs</title>
+    
+    <!-- PWA Meta Tags -->
+    <meta name="theme-color" content="#0d6efd">
+    <meta name="description" content="Aplikacja do zarządzania leadami i obszarami sprzedażowymi">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="Neptun LEADs">
+    <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+    <link rel="icon" type="image/png" sizes="192x192" href="{{ url_for('static', filename='icon-192.png') }}">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='icon-192.png') }}">
     
     <!-- Bootstrap CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
@@ -13,24 +23,73 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
     
     <style>
+        * {
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+        }
+        
+        input, textarea, select {
+            -webkit-user-select: text;
+            -moz-user-select: text;
+            -ms-user-select: text;
+            user-select: text;
+        }
+        
         body {
             padding: 0;
             margin: 0;
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            touch-action: pan-y pinch-zoom;
         }
         
         #map {
-            height: calc(100vh - 56px);
+            height: 100vh;
             width: 100%;
+            touch-action: none;
+            padding-top: 56px;
+        }
+        
+        .leaflet-container {
+            touch-action: pan-x pan-y;
         }
         
         .navbar {
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 1030;
         }
         
         .modal-body label {
             font-weight: 500;
             margin-bottom: 0.5rem;
+        }
+        
+        .modal {
+            touch-action: auto;
+        }
+        
+        .modal-dialog {
+            display: flex;
+            align-items: center;
+            min-height: calc(100% - 1rem);
+            margin: 0.5rem auto;
+        }
+        
+        @media (min-width: 576px) {
+            .modal-dialog {
+                min-height: calc(100% - 3.5rem);
+                margin: 1.75rem auto;
+            }
+        }
+        
+        .modal-content {
+            touch-action: pan-y;
         }
         
         .location-marker {
@@ -91,6 +150,140 @@
             box-shadow: 0 4px 8px rgba(0,0,0,0.3);
         }
         
+        .btn-search-map {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 1000;
+            border-radius: 50%;
+            width: 60px;
+            height: 60px;
+            font-size: 24px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+        }
+        
+        /* Floating action buttons container */
+        .floating-buttons {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            z-index: 1000;
+            display: flex;
+            flex-direction: row;
+            gap: 10px;
+            align-items: center;
+        }
+        
+        .floating-buttons .btn {
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            padding: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+            border: none;
+        }
+        
+        .floating-buttons .btn:hover {
+            transform: scale(1.1);
+            transition: transform 0.2s;
+        }
+        
+        /* Floating sections layout */
+        #floatingLoggedInSection,
+        #floatingLoggedOutSection {
+            display: flex;
+            flex-direction: row;
+            gap: 10px;
+            align-items: center;
+        }
+        
+        /* Username display in floating buttons */
+        .floating-username {
+            background: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            font-size: 14px;
+            font-weight: 500;
+            color: #333;
+        }
+        
+        /* Toast notifications container */
+        .toast-container {
+            position: fixed;
+            top: 70px;
+            right: 20px;
+            z-index: 9999;
+        }
+        
+        .custom-toast {
+            min-width: 300px;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            margin-bottom: 10px;
+            animation: slideInRight 0.3s ease-out;
+        }
+        
+        @keyframes slideInRight {
+            from {
+                transform: translateX(400px);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+        
+        .custom-toast .toast-header {
+            background: transparent;
+            border-bottom: 1px solid rgba(0,0,0,0.05);
+            padding: 12px 16px;
+        }
+        
+        .custom-toast .toast-body {
+            padding: 12px 16px;
+        }
+        
+        .custom-toast.toast-success .toast-header {
+            color: #28a745;
+        }
+        
+        .custom-toast.toast-error .toast-header {
+            color: #dc3545;
+        }
+        
+        .custom-toast.toast-warning .toast-header {
+            color: #ffc107;
+        }
+        
+        .custom-toast.toast-info .toast-header {
+            color: #17a2b8;
+        }
+        
+        .search-result-list-item {
+            padding: 10px;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            margin-bottom: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .search-result-list-item:hover {
+            background-color: #e7f1ff;
+            border-color: #0d6efd;
+        }
+        
+        .search-result-list-item strong {
+            color: #0d6efd;
+        }
+        
         .side-panel {
             position: fixed;
             top: 56px;
@@ -144,6 +337,69 @@
         .geometry-layer:hover {
             fill-opacity: 0.4 !important;
         }
+        
+        .pwa-install-banner {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: linear-gradient(135deg, #0d6efd 0%, #0a58ca 100%);
+            color: white;
+            padding: 16px;
+            box-shadow: 0 -2px 10px rgba(0,0,0,0.2);
+            z-index: 9999;
+            display: none;
+            animation: slideUp 0.3s ease-out;
+        }
+        
+        @keyframes slideUp {
+            from {
+                transform: translateY(100%);
+            }
+            to {
+                transform: translateY(0);
+            }
+        }
+        
+        .pwa-install-banner .container-fluid {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+        }
+        
+        .pwa-install-banner .banner-content {
+            flex: 1;
+        }
+        
+        .pwa-install-banner h6 {
+            margin: 0 0 5px 0;
+            font-weight: bold;
+        }
+        
+        .pwa-install-banner p {
+            margin: 0;
+            font-size: 0.9em;
+            opacity: 0.9;
+        }
+        
+        .pwa-install-banner .banner-actions {
+            display: flex;
+            gap: 10px;
+        }
+        
+        @media (max-width: 576px) {
+            .pwa-install-banner .container-fluid {
+                flex-direction: column;
+                text-align: center;
+            }
+            .pwa-install-banner .banner-actions {
+                width: 100%;
+            }
+            .pwa-install-banner .banner-actions button {
+                flex: 1;
+            }
+        }
     </style>
 </head>
 <body>
@@ -151,40 +407,61 @@
     <nav class="navbar navbar-dark bg-primary">
         <div class="container-fluid">
             <span class="navbar-brand mb-0 h1">📍 Neptun LEADs</span>
-            <div id="navbarButtons">
-                <!-- Shown when logged in -->
-                <span id="loggedInSection" style="display: none;">
-                    <span class="text-white me-3">👤 <span id="currentUsername"></span></span>
-                    <button class="btn btn-success btn-sm me-2" onclick="showRandomAreaModal()">
-                        🎲 Losuj obszar
-                    </button>
-                    <button class="btn btn-light btn-sm me-2" onclick="showStats()">
-                        📊 Statystyki
-                    </button>
-                    <button class="btn btn-outline-light btn-sm" onclick="logout()">
-                        Wyloguj
-                    </button>
-                </span>
-                <!-- Shown when logged out -->
-                <span id="loggedOutSection">
-                    <button class="btn btn-light btn-sm me-2" onclick="showLoginModal()">
-                        Zaloguj się
-                    </button>
-                    <button class="btn btn-success btn-sm" onclick="showRegisterModal()">
-                        Zarejestruj się
-                    </button>
-                </span>
-            </div>
         </div>
     </nav>
 
     <!-- Map Container -->
     <div id="map"></div>
-
-    <!-- Add Location Button (hidden - areas loaded automatically) -->
-    <button class="btn btn-primary btn-add-location" onclick="openAddLocationPanel()" title="Dodaj własną lokalizację" style="display: none;">
+    
+    <!-- Floating Action Buttons -->
+    <div class="floating-buttons">
+        <!-- Shown when logged in -->
+        <div id="floatingLoggedInSection" style="display: none;">
+            <div class="floating-username">
+                👤 <span id="floatingUsername"></span>
+            </div>
+            <button class="btn btn-success" onclick="showRandomAreaModal()" title="Losuj obszar">
+                🎲
+            </button>
+            <button class="btn btn-light" onclick="showStats()" title="Statystyki">
+                📊
+            </button>
+            <button class="btn btn-danger" onclick="confirmLogout()" title="Wyloguj">
+                ✕
+            </button>
+        </div>
+        <!-- Shown when logged out -->
+        <div id="floatingLoggedOutSection">
+            <button class="btn btn-light" onclick="showLoginModal()" title="Zaloguj się">
+                🔑
+            </button>
+            <button class="btn btn-success" onclick="showRegisterModal()" title="Zarejestruj się">
+                ✍️
+            </button>
+        </div>
+    </div>
+    
+    <!-- Search Map Button (right side) -->
+    <button class="btn btn-primary btn-search-map" onclick="showSearchMapModal()" title="Wyszukaj obszar na mapie">
         🔍
     </button>
+    
+    <!-- PWA Install Banner -->
+    <div class="pwa-install-banner" id="pwaInstallBanner">
+        <div class="container-fluid">
+            <div class="banner-content">
+                <h6>📱 Zainstaluj aplikację</h6>
+                <p>Dodaj Neptun LEADs do ekranu głównego dla szybszego dostępu</p>
+            </div>
+            <div class="banner-actions">
+                <button class="btn btn-light btn-sm" onclick="installPWA()">Zainstaluj</button>
+                <button class="btn btn-outline-light btn-sm" onclick="dismissPWABanner()">Później</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Toast Notifications Container -->
+    <div class="toast-container" id="toastContainer"></div>
 
     <!-- Side Panel for Adding Location -->
     <div class="side-panel" id="addLocationPanel">
@@ -373,6 +650,48 @@
         </div>
     </div>
 
+    <!-- Modal: Search Map -->
+    <div class="modal fade" id="searchMapModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header bg-primary text-white">
+                    <h5 class="modal-title">🔍 Wyszukaj obszar</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="searchMapInput" class="form-label">Wpisz nazwę miejscowości lub obszaru:</label>
+                        <div class="input-group">
+                            <input type="text" class="form-control" id="searchMapInput" placeholder="np. Warszawa, Kraków Nowa Huta...">
+                            <button class="btn btn-primary" type="button" onclick="performMapSearch()">
+                                Szukaj
+                            </button>
+                        </div>
+                        <small class="text-muted">Wyszukiwanie rozpoczyna się od obszarów najbliższych Bydgoszczy</small>
+                    </div>
+                    
+                    <div id="mapSearchResults" style="display: none;">
+                        <label class="form-label fw-bold">Wyniki wyszukiwania:</label>
+                        <div id="mapSearchResultsList" style="max-height: 400px; overflow-y: auto;">
+                            <!-- Results will be populated here -->
+                        </div>
+                    </div>
+                    
+                    <div id="mapSearchLoading" style="display: none;" class="text-center py-3">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">Ładowanie...</span>
+                        </div>
+                        <p class="mt-2">Wyszukiwanie...</p>
+                    </div>
+                    
+                    <div id="mapSearchNoResults" style="display: none;" class="alert alert-warning">
+                        Nie znaleziono wyników. Spróbuj innej nazwy.
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Modal: Random Area -->
     <div class="modal fade" id="randomAreaModal" tabindex="-1">
         <div class="modal-dialog">
@@ -382,6 +701,12 @@
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="randomMinRadius" class="form-label">Minimalna odległość od Bydgoszczy (km):</label>
+                        <input type="number" class="form-control" id="randomMinRadius" min="0" max="200" value="10">
+                        <small class="text-muted">Domyślnie: 10 km</small>
+                    </div>
+                    
                     <div class="mb-3">
                         <label for="randomRadius" class="form-label">Maksymalna odległość od Bydgoszczy (km):</label>
                         <input type="number" class="form-control" id="randomRadius" min="1" max="200" value="50">
@@ -397,7 +722,7 @@
                     <div class="alert alert-info">
                         <strong>Kryteria losowania:</strong>
                         <ul class="mb-0 mt-2">
-                            <li>Obszary w określonym promieniu od Bydgoszczy</li>
+                            <li>Obszary w określonym zakresie odległości od Bydgoszczy</li>
                             <li>Brak wpisów od wybranej liczby miesięcy</li>
                             <li>Brak oznaczenia "Brak rokowań"</li>
                             <li>Preferencja dla obszarów z dobrymi wynikami w przeszłości</li>
@@ -496,5 +821,20 @@
     
     <!-- App JS -->
     <script src="{{ url_for('static', filename='app.js') }}"></script>
+    
+    <!-- Service Worker Registration -->
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', function() {
+                navigator.serviceWorker.register("{{ url_for('static', filename='sw.js') }}")
+                    .then(function(registration) {
+                        console.log('ServiceWorker registered:', registration.scope);
+                    })
+                    .catch(function(error) {
+                        console.log('ServiceWorker registration failed:', error);
+                    });
+            });
+        }
+    </script>
 </body>
 </html>

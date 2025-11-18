@@ -1,5 +1,7 @@
 // Initialize map centered on Bydgoszcz
-let map = L.map('map').setView([53.1235, 18.0084], 12);
+let map = L.map('map', {
+    zoomControl: false  // Disable zoom buttons
+}).setView([53.1235, 18.0084], 12);
 
 // Add OpenStreetMap tiles
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -14,6 +16,7 @@ let users = [];
 let reservations = [];
 let currentUser = null;
 let markers = {};
+let deferredPrompt = null; // For PWA install prompt
 let allAreas = []; // All areas from OSM
 let areaLayers = {}; // Layers for all areas
 let addingLocation = false;
@@ -28,9 +31,11 @@ let searchResults = [];
 let selectedResultIndex = null;
 let isLoadingAreas = false;
 let loadedBounds = null;
+let loadedRegions = []; // Cache of loaded bounding boxes to avoid reloading same areas
+let areasCache = new Map(); // Cache areas by their place_id to avoid duplicates
 
 // Modals
-let addLeadDataModal, statsModal, randomAreaModal, loginModal, registerModal;
+let addLeadDataModal, statsModal, randomAreaModal, loginModal, registerModal, searchMapModal;
 
 // Initialize modals when document is ready
 document.addEventListener('DOMContentLoaded', function() {
@@ -39,6 +44,7 @@ document.addEventListener('DOMContentLoaded', function() {
     randomAreaModal = new bootstrap.Modal(document.getElementById('randomAreaModal'));
     loginModal = new bootstrap.Modal(document.getElementById('loginModal'));
     registerModal = new bootstrap.Modal(document.getElementById('registerModal'));
+    searchMapModal = new bootstrap.Modal(document.getElementById('searchMapModal'));
     
     // Initialize drawing layer
     drawnItems = new L.FeatureGroup();
@@ -71,8 +77,19 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
     
+    // Add Enter key handler for map search
+    document.getElementById('searchMapInput').addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            performMapSearch();
+        }
+    });
+    
     // Check current user session
     checkCurrentUser();
+    
+    // PWA install prompt handling
+    setupPWAInstall();
     
     // Load initial data
     loadLocations();
@@ -80,14 +97,44 @@ document.addEventListener('DOMContentLoaded', function() {
     loadUsers();
     loadReservations();
     
+    // Preload nearby areas in background (100km radius from Bydgoszcz)
+    setTimeout(() => {
+        preloadNearbyAreas();
+    }, 2000); // Wait 2 seconds after app start to not block other requests
+    
     // Load areas when map is ready
     map.whenReady(function() {
         loadAreasInView();
     });
     
-    // Reload areas when map moves or zooms
+    // Reload areas when map moves or zooms (with debounce)
+    let moveEndTimeout = null;
     map.on('moveend', function() {
-        loadAreasInView();
+        // Clear previous timeout
+        if (moveEndTimeout) {
+            clearTimeout(moveEndTimeout);
+        }
+        
+        // Set new timeout - wait 500ms after movement stops
+        moveEndTimeout = setTimeout(() => {
+            loadAreasInView();
+        }, 500);
+    });
+    
+    // Reload areas when user returns to the app (e.g., after opening Google Maps)
+    document.addEventListener('visibilitychange', function() {
+        if (!document.hidden) {
+            console.log('App became visible, refreshing display...');
+            // Just refresh display of already loaded areas
+            displayAllAreas();
+        }
+    });
+    
+    // Also reload when window gains focus
+    window.addEventListener('focus', function() {
+        console.log('Window gained focus, refreshing display...');
+        // Just refresh display of already loaded areas
+        displayAllAreas();
     });
 });
 
@@ -115,15 +162,17 @@ async function checkCurrentUser() {
 
 // Update UI for logged in user
 function updateUIForLoggedInUser() {
-    document.getElementById('loggedInSection').style.display = 'inline';
-    document.getElementById('loggedOutSection').style.display = 'none';
-    document.getElementById('currentUsername').textContent = currentUser.username;
+    // Update floating buttons
+    document.getElementById('floatingLoggedInSection').style.display = 'block';
+    document.getElementById('floatingLoggedOutSection').style.display = 'none';
+    document.getElementById('floatingUsername').textContent = currentUser.username;
 }
 
 // Update UI for logged out user
 function updateUIForLoggedOutUser() {
-    document.getElementById('loggedInSection').style.display = 'none';
-    document.getElementById('loggedOutSection').style.display = 'inline';
+    // Update floating buttons
+    document.getElementById('floatingLoggedInSection').style.display = 'none';
+    document.getElementById('floatingLoggedOutSection').style.display = 'block';
 }
 
 // Show login modal
@@ -236,6 +285,14 @@ async function register() {
     }
 }
 
+// Confirm logout with toast
+function confirmLogout() {
+    showConfirm(
+        'Czy na pewno chcesz się wylogować?',
+        logout
+    );
+}
+
 // Logout
 async function logout() {
     try {
@@ -246,8 +303,138 @@ async function logout() {
         // Clear sensitive data
         leadData = [];
         displayAllAreas();
+        
+        showToast('Wylogowano pomyślnie', 'success');
     } catch (error) {
         console.error('Logout error:', error);
+        showToast('Błąd podczas wylogowania', 'error');
+    }
+}
+
+// Preload areas within 100km radius from Bydgoszcz at startup
+async function preloadNearbyAreas() {
+    console.log('Preloading areas within 100km from Bydgoszcz...');
+    
+    const radiusKm = 100;
+    const radiusDegrees = radiusKm / 111; // Approximate: 1 degree ≈ 111 km
+    
+    // Calculate bounding box around Bydgoszcz
+    const south = BYDGOSZCZ_LAT - radiusDegrees;
+    const north = BYDGOSZCZ_LAT + radiusDegrees;
+    const west = BYDGOSZCZ_LNG - radiusDegrees;
+    const east = BYDGOSZCZ_LNG + radiusDegrees;
+    
+    try {
+        console.log('Preload bounds:', {south, west, north, east});
+        
+        const overpassUrl = `https://overpass-api.de/api/interpreter`;
+        
+        // Single comprehensive query for all administrative areas
+        const query = `[out:json][timeout:60];
+(
+  node["place"~"city|town|village|hamlet|suburb|neighbourhood"](${south},${west},${north},${east});
+  way["place"~"city|town|village|hamlet|suburb|neighbourhood"](${south},${west},${north},${east});
+  relation["boundary"="administrative"]["admin_level"~"^(7|8|9)$"](${south},${west},${north},${east});
+);
+out center;`;
+        
+        showToast('Ładowanie obszarów w okolicy...', 'info', 3000);
+        
+        const response = await fetch(overpassUrl, {
+            method: 'POST',
+            body: query
+        });
+        
+        if (!response.ok) {
+            console.log(`Preload failed with status: ${response.status}`);
+            return;
+        }
+        
+        const data = await response.json();
+        const elements = data.elements || [];
+        
+        console.log(`Preloaded ${elements.length} elements`);
+        
+        // Convert to our format
+        let loadedCount = 0;
+        for (const element of elements) {
+            if (!element.tags || !element.tags.name) continue;
+            
+            const name = element.tags.name;
+            let centerLat = 0;
+            let centerLon = 0;
+            
+            if (element.type === 'node') {
+                centerLat = element.lat;
+                centerLon = element.lon;
+            } else if (element.center) {
+                centerLat = element.center.lat;
+                centerLon = element.center.lon;
+            } else if (element.type === 'way' && element.geometry) {
+                let sumLat = 0, sumLon = 0;
+                element.geometry.forEach(point => {
+                    sumLat += point.lat;
+                    sumLon += point.lon;
+                });
+                centerLat = sumLat / element.geometry.length;
+                centerLon = sumLon / element.geometry.length;
+            } else if (element.type === 'relation' && element.members) {
+                let sumLat = 0, sumLon = 0, totalPoints = 0;
+                element.members.forEach(member => {
+                    if (member.geometry) {
+                        member.geometry.forEach(point => {
+                            sumLat += point.lat;
+                            sumLon += point.lon;
+                            totalPoints++;
+                        });
+                    }
+                });
+                if (totalPoints > 0) {
+                    centerLat = sumLat / totalPoints;
+                    centerLon = sumLon / totalPoints;
+                }
+            }
+            
+            if (centerLat === 0 && centerLon === 0) continue;
+            
+            // Add to cache
+            const area = {
+                place_id: element.id,
+                name: name,
+                lat: centerLat,
+                lon: centerLon,
+                geojson: null,
+                type: element.tags?.place || element.tags?.boundary || 'area',
+                display_name: name,
+                tags: element.tags
+            };
+            
+            if (!areasCache.has(area.place_id)) {
+                areasCache.set(area.place_id, area);
+                allAreas.push(area);
+                loadedCount++;
+            }
+        }
+        
+        // Mark the entire region as loaded
+        loadedRegions.push({
+            south: south,
+            west: west,
+            north: north,
+            east: east
+        });
+        
+        console.log(`Preloaded ${loadedCount} new areas. Cache size: ${areasCache.size}`);
+        showToast(`Załadowano ${loadedCount} obszarów w okolicy`, 'success', 3000);
+        
+        // Display areas if map is zoomed in
+        if (map.getZoom() >= 10) {
+            displayAllAreas();
+        }
+        
+    } catch (error) {
+        console.error('Preload error:', error);
+        showToast('Nie udało się załadować obszarów w tle', 'warning', 3000);
     }
 }
 
@@ -264,9 +451,35 @@ async function loadAreasInView() {
         return;
     }
     
-    // Check if we already loaded this area
-    if (loadedBounds && loadedBounds.contains(bounds)) {
-        return; // Already loaded
+    // Check if this region was already loaded
+    const south = bounds.getSouth();
+    const west = bounds.getWest();
+    const north = bounds.getNorth();
+    const east = bounds.getEast();
+    
+    // Check if current view overlaps significantly with any already loaded region
+    const alreadyLoaded = loadedRegions.some(region => {
+        // Check if at least 80% of current view is covered by this region
+        const overlapSouth = Math.max(south, region.south);
+        const overlapWest = Math.max(west, region.west);
+        const overlapNorth = Math.min(north, region.north);
+        const overlapEast = Math.min(east, region.east);
+        
+        if (overlapSouth >= overlapNorth || overlapWest >= overlapEast) {
+            return false; // No overlap
+        }
+        
+        const overlapArea = (overlapNorth - overlapSouth) * (overlapEast - overlapWest);
+        const currentArea = (north - south) * (east - west);
+        const coverage = overlapArea / currentArea;
+        
+        return coverage > 0.8; // 80% covered
+    });
+    
+    if (alreadyLoaded) {
+        console.log('Region already loaded from cache, just displaying...');
+        displayAllAreas();
+        return;
     }
     
     isLoadingAreas = true;
@@ -404,20 +617,24 @@ out geom;`
             console.log('Sample area:', newAreas[0]);
         }
         
-        // Add new areas to our collection (avoid duplicates)
+        // Add new areas to our collection and cache
         newAreas.forEach(newArea => {
-            const exists = allAreas.find(a => a.place_id === newArea.place_id);
-            if (!exists) {
+            // Check if already in cache
+            if (!areasCache.has(newArea.place_id)) {
+                areasCache.set(newArea.place_id, newArea);
                 allAreas.push(newArea);
             }
         });
         
-        // Update loaded bounds (with some margin)
-        const margin = 0.05;
-        loadedBounds = L.latLngBounds(
-            [south - margin, west - margin],
-            [north + margin, east + margin]
-        );
+        // Store this region as loaded
+        loadedRegions.push({
+            south: south,
+            west: west,
+            north: north,
+            east: east
+        });
+        
+        console.log(`Cache now contains ${areasCache.size} areas, ${loadedRegions.length} regions loaded`);
         
         // Display all areas
         displayAllAreas();
@@ -431,14 +648,22 @@ out geom;`
 
 // Display all areas on the map
 function displayAllAreas() {
+    // Use cache if available, otherwise fallback to allAreas
+    const areasToDisplay = areasCache.size > 0 ? Array.from(areasCache.values()) : allAreas;
+    
+    console.log(`displayAllAreas called - showing ${areasToDisplay.length} total areas (from ${areasCache.size > 0 ? 'cache' : 'legacy array'})`);
+    
     // Clear existing area layers
     Object.values(areaLayers).forEach(layer => map.removeLayer(layer));
     areaLayers = {};
     
     // Get current map bounds
     const bounds = map.getBounds();
+    console.log(`Current map bounds:`, bounds.toBBoxString());
     
-    allAreas.forEach((area, index) => {
+    let displayedCount = 0;
+    
+    areasToDisplay.forEach((area, index) => {
         const lat = parseFloat(area.lat);
         const lon = parseFloat(area.lon);
         
@@ -446,6 +671,8 @@ function displayAllAreas() {
         if (!bounds.contains([lat, lon])) {
             return;
         }
+        
+        displayedCount++;
         
         const areaName = area.name || area.display_name.split(',')[0];
         
@@ -460,9 +687,13 @@ function displayAllAreas() {
         let totalLeads = 0;
         let totalRejections = 0;
         let locationLeadData = [];
+        let hasNoProspects = false;
         
         if (matchingLocation) {
             locationLeadData = leadData.filter(ld => ld.location_id === matchingLocation.id);
+            
+            // Check if any entry has no_prospects flag
+            hasNoProspects = locationLeadData.some(ld => ld.no_prospects === 1);
             
             // Apply date filter if active
             let filteredData = locationLeadData;
@@ -483,10 +714,19 @@ function displayAllAreas() {
             }
         }
         
-        // Create custom icon
+        // Create custom icon - use X for no prospects, dot otherwise
+        let iconHtml;
+        if (hasNoProspects) {
+            // X marker for no prospects
+            iconHtml = `<div style="color: #dc3545; font-weight: bold; font-size: 14px; text-shadow: 0 0 3px white, 0 0 3px white;">✕</div>`;
+        } else {
+            // Regular dot marker
+            iconHtml = `<div style="background-color: ${markerColor}; width: 12px; height: 12px; border-radius: 50%; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>`;
+        }
+        
         const icon = L.divIcon({
             className: 'custom-marker',
-            html: `<div style="background-color: ${markerColor}; width: 12px; height: 12px; border-radius: 50%; border: 2px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>`,
+            html: iconHtml,
             iconSize: [12, 12],
             iconAnchor: [6, 6]
         });
@@ -546,14 +786,14 @@ function displayAllAreas() {
         areaLayers[`area_${index}`] = marker;
     });
     
-    console.log(`Displayed ${Object.keys(areaLayers).length} areas as markers on map`);
+    console.log(`Displayed ${displayedCount} areas as markers on map (out of ${areasToDisplay.length} total)`);
 }
 
 // Open modal to add/edit lead data for an area
 function openLeadDataModalForArea(area, existingLocation) {
     // Check if user is logged in
     if (!currentUser) {
-        alert('Musisz być zalogowany, aby dodać dane');
+        showToast('Musisz być zalogowany, aby dodać dane', 'warning');
         showLoginModal();
         return;
     }
@@ -592,7 +832,7 @@ function openLeadDataModalForArea(area, existingLocation) {
         })
         .catch(error => {
             console.error('Error creating location:', error);
-            alert('Błąd podczas tworzenia lokalizacji');
+            showToast('Błąd podczas tworzenia lokalizacji', 'error');
         });
     } else {
         openLeadDataModal(existingLocation);
@@ -608,7 +848,7 @@ async function loadLocations() {
         displayAllAreas(); // Refresh area colors
     } catch (error) {
         console.error('Error loading locations:', error);
-        alert('Błąd podczas wczytywania lokalizacji');
+        showToast('Błąd podczas wczytywania lokalizacji', 'error');
     }
 }
 
@@ -717,7 +957,7 @@ function clearAll() {
 async function searchLocation() {
     const query = document.getElementById('locationSearch').value.trim();
     if (!query) {
-        alert('Proszę wpisać nazwę lokalizacji');
+        showToast('Proszę wpisać nazwę lokalizacji', 'warning');
         return;
     }
     
@@ -730,7 +970,7 @@ async function searchLocation() {
         searchResults = await response.json();
         
         if (searchResults.length === 0) {
-            alert('Nie znaleziono lokalizacji. Spróbuj innej nazwy.');
+            showToast('Nie znaleziono lokalizacji. Spróbuj innej nazwy.', 'info');
             return;
         }
         
@@ -739,7 +979,7 @@ async function searchLocation() {
         
     } catch (error) {
         console.error('Error searching location:', error);
-        alert('Błąd podczas wyszukiwania lokalizacji');
+        showToast('Błąd podczas wyszukiwania lokalizacji', 'error');
     }
 }
 
@@ -994,12 +1234,12 @@ async function saveLocation() {
     const type = document.getElementById('locationType').value;
     
     if (!name) {
-        alert('Proszę podać nazwę lokalizacji');
+        showToast('Proszę podać nazwę lokalizacji', 'warning');
         return;
     }
     
     if (!selectedCoords) {
-        alert('Proszę wybrać lokalizację na mapie');
+        showToast('Proszę wybrać lokalizację na mapie', 'warning');
         return;
     }
     
@@ -1030,11 +1270,11 @@ async function saveLocation() {
             // Reload locations
             await loadLocations();
         } else {
-            alert('Błąd podczas zapisywania lokalizacji');
+            showToast('Błąd podczas zapisywania lokalizacji', 'error');
         }
     } catch (error) {
         console.error('Error saving location:', error);
-        alert('Błąd podczas zapisywania lokalizacji');
+        showToast('Błąd podczas zapisywania lokalizacji', 'error');
     }
 }
 
@@ -1066,7 +1306,7 @@ async function saveLeadData() {
     const noProspects = document.getElementById('noProspects').checked ? 1 : 0;
     
     if (!date) {
-        alert('Proszę podać datę');
+        showToast('Proszę podać datę', 'warning');
         return;
     }
     
@@ -1089,11 +1329,11 @@ async function saveLeadData() {
             addLeadDataModal.hide();
             await loadLeadData();
         } else {
-            alert('Błąd podczas zapisywania danych');
+            showToast('Błąd podczas zapisywania danych', 'error');
         }
     } catch (error) {
         console.error('Error saving lead data:', error);
-        alert('Błąd podczas zapisywania danych');
+        showToast('Błąd podczas zapisywania danych', 'error');
     }
 }
 
@@ -1102,26 +1342,28 @@ async function deleteLocation() {
     const locationId = parseInt(document.getElementById('leadLocationId').value);
     const locationName = document.getElementById('leadLocationName').value;
     
-    if (!confirm(`Czy na pewno chcesz usunąć lokalizację "${locationName}" i wszystkie powiązane dane?`)) {
-        return;
-    }
-    
-    try {
-        const response = await fetch(`/api/locations/${locationId}`, {
-            method: 'DELETE'
-        });
-        
-        if (response.ok) {
-            addLeadDataModal.hide();
-            await loadLocations();
-            await loadLeadData();
-        } else {
-            alert('Błąd podczas usuwania lokalizacji');
+    showConfirm(
+        `Czy na pewno chcesz usunąć lokalizację "${locationName}" i wszystkie powiązane dane?`,
+        async () => {
+            try {
+                const response = await fetch(`/api/locations/${locationId}`, {
+                    method: 'DELETE'
+                });
+                
+                if (response.ok) {
+                    addLeadDataModal.hide();
+                    await loadLocations();
+                    await loadLeadData();
+                    showToast('Lokalizacja została usunięta', 'success');
+                } else {
+                    showToast('Błąd podczas usuwania lokalizacji', 'error');
+                }
+            } catch (error) {
+                console.error('Error deleting location:', error);
+                showToast('Błąd podczas usuwania lokalizacji', 'error');
+            }
         }
-    } catch (error) {
-        console.error('Error deleting location:', error);
-        alert('Błąd podczas usuwania lokalizacji');
-    }
+    );
 }
 
 // Apply date filter
@@ -1152,7 +1394,7 @@ let statsFilters = {
 // Show statistics
 function showStats() {
     if (locations.length === 0) {
-        alert('Brak danych do wyświetlenia');
+        showToast('Brak danych do wyświetlenia', 'info');
         return;
     }
     
@@ -1800,7 +2042,7 @@ function calculateDistance(lat1, lon1, lat2, lon2) {
 // Show random area modal
 function showRandomAreaModal() {
     if (!currentUser) {
-        alert('Musisz być zalogowany, aby losować obszary');
+        showToast('Musisz być zalogowany, aby losować obszary', 'warning');
         showLoginModal();
         return;
     }
@@ -1818,8 +2060,15 @@ function showRandomAreaModal() {
 let lastSelectedArea = null; // Store for reservation
 
 function performRandomSelection() {
+    const minRadius = parseFloat(document.getElementById('randomMinRadius').value);
     const maxRadius = parseFloat(document.getElementById('randomRadius').value);
     const monthsThreshold = parseInt(document.getElementById('randomMonths').value);
+    
+    // Validate radii
+    if (minRadius >= maxRadius) {
+        showToast('Minimalna odległość musi być mniejsza niż maksymalna', 'warning');
+        return;
+    }
     
     // Calculate date threshold
     const thresholdDate = new Date();
@@ -1830,9 +2079,10 @@ function performRandomSelection() {
     const today = new Date().toISOString().split('T')[0];
     
     console.log('Random selection criteria:', {
+        minRadius,
         maxRadius,
         monthsThreshold,
-        thresholdDateStr,
+        thresholdDate: thresholdDateStr,
         today
     });
     
@@ -1843,18 +2093,19 @@ function performRandomSelection() {
     
     console.log('Reserved areas today:', reservedToday);
     
-    // Filter eligible areas
+    // Filter eligible areas - use cache if available
+    const areasToCheck = areasCache.size > 0 ? Array.from(areasCache.values()) : allAreas;
     const eligibleAreas = [];
     
-    allAreas.forEach(area => {
+    areasToCheck.forEach(area => {
         // 1. Check distance from Bydgoszcz
         const distance = calculateDistance(
             BYDGOSZCZ_LAT, BYDGOSZCZ_LNG,
             area.lat, area.lon
         );
         
-        if (distance > maxRadius) {
-            return; // Too far
+        if (distance < minRadius || distance > maxRadius) {
+            return; // Too close or too far
         }
         
         // Check if area is reserved for today
@@ -1945,7 +2196,7 @@ function performRandomSelection() {
     console.log(`Found ${eligibleAreas.length} eligible areas`);
     
     if (eligibleAreas.length === 0) {
-        alert('Nie znaleziono obszarów spełniających kryteria.\n\nSpróbuj zwiększyć promień lub zmniejszyć liczbę miesięcy.');
+        showToast('Nie znaleziono obszarów spełniających kryteria. Spróbuj zwiększyć promień lub zmniejszyć liczbę miesięcy.', 'info', 6000);
         return;
     }
     
@@ -2003,19 +2254,19 @@ function performRandomSelection() {
 // Make reservation for selected area
 async function makeReservation() {
     if (!lastSelectedArea) {
-        alert('Nie wybrano obszaru do rezerwacji');
+        showToast('Nie wybrano obszaru do rezerwacji', 'warning');
         return;
     }
     
     if (!currentUser) {
-        alert('Musisz być zalogowany, aby dokonać rezerwacji');
+        showToast('Musisz być zalogowany, aby dokonać rezerwacji', 'warning');
         showLoginModal();
         return;
     }
     
     const reservationDate = document.getElementById('reservationDate').value;
     if (!reservationDate) {
-        alert('Proszę wybrać datę rezerwacji');
+        showToast('Proszę wybrać datę rezerwacji', 'warning');
         return;
     }
     
@@ -2034,18 +2285,412 @@ async function makeReservation() {
         });
         
         if (response.ok) {
-            alert(`Zarezerwowano obszar "${lastSelectedArea.area.name}" na dzień ${reservationDate}`);
             await loadReservations();
             randomAreaModal.hide();
+            
+            // Open Google Maps with navigation to the area
+            const lat = lastSelectedArea.area.lat;
+            const lon = lastSelectedArea.area.lon;
+            const areaName = encodeURIComponent(lastSelectedArea.area.name);
+            
+            // Google Maps URL with directions
+            // This works on both mobile and desktop
+            const mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lon}&destination_place_id=${areaName}`;
+            
+            // Open in new tab/window
+            window.open(mapsUrl, '_blank');
         } else {
             const data = await response.json();
-            alert(`Błąd rezerwacji: ${data.error || 'Nieznany błąd'}`);
+            showToast(`Błąd rezerwacji: ${data.error || 'Nieznany błąd'}`, 'error');
         }
     } catch (error) {
         console.error('Reservation error:', error);
-        alert('Błąd podczas tworzenia rezerwacji');
+        showToast('Błąd podczas tworzenia rezerwacji', 'error');
     }
 }
+
+// ============== PWA INSTALL ==============
+
+// Setup PWA install prompt
+function setupPWAInstall() {
+    // Listen for beforeinstallprompt event
+    window.addEventListener('beforeinstallprompt', (e) => {
+        // Prevent Chrome 67 and earlier from automatically showing the prompt
+        e.preventDefault();
+        // Stash the event so it can be triggered later
+        deferredPrompt = e;
+        
+        // Check if user dismissed banner before
+        const dismissed = localStorage.getItem('pwa-install-dismissed');
+        const dismissedTime = localStorage.getItem('pwa-install-dismissed-time');
+        
+        // Show banner if not dismissed, or if dismissed more than 7 days ago
+        if (!dismissed || (dismissedTime && Date.now() - parseInt(dismissedTime) > 7 * 24 * 60 * 60 * 1000)) {
+            showPWABanner();
+        }
+    });
+    
+    // Listen for app installed event
+    window.addEventListener('appinstalled', () => {
+        console.log('PWA was installed');
+        hidePWABanner();
+        deferredPrompt = null;
+    });
+    
+    // Check if already installed
+    if (window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone) {
+        console.log('App is running in standalone mode');
+        hidePWABanner();
+    }
+}
+
+// Show PWA install banner
+function showPWABanner() {
+    const banner = document.getElementById('pwaInstallBanner');
+    if (banner) {
+        banner.style.display = 'block';
+    }
+}
+
+// Hide PWA install banner
+function hidePWABanner() {
+    const banner = document.getElementById('pwaInstallBanner');
+    if (banner) {
+        banner.style.display = 'none';
+    }
+}
+
+// Install PWA
+async function installPWA() {
+    if (!deferredPrompt) {
+        showToast('Instalacja aplikacji nie jest dostępna w tej przeglądarce. Spróbuj: Chrome/Edge: Menu → Dodaj do ekranu głównego lub Safari: Udostępnij → Dodaj do ekranu początkowego', 'info', 6000);
+        return;
+    }
+    
+    // Show the install prompt
+    deferredPrompt.prompt();
+    
+    // Wait for the user to respond to the prompt
+    const { outcome } = await deferredPrompt.userChoice;
+    console.log(`User response to install prompt: ${outcome}`);
+    
+    if (outcome === 'accepted') {
+        console.log('User accepted the install prompt');
+    } else {
+        console.log('User dismissed the install prompt');
+    }
+    
+    // Clear the deferredPrompt
+    deferredPrompt = null;
+    hidePWABanner();
+}
+
+// Dismiss PWA banner
+function dismissPWABanner() {
+    hidePWABanner();
+    localStorage.setItem('pwa-install-dismissed', 'true');
+    localStorage.setItem('pwa-install-dismissed-time', Date.now().toString());
+}
+
+// ============== MAP SEARCH ==============
+
+let mapSearchResultsData = [];
+
+// Show search map modal
+function showSearchMapModal() {
+    if (searchMapModal) {
+        // Clear previous search
+        document.getElementById('searchMapInput').value = '';
+        document.getElementById('mapSearchResults').style.display = 'none';
+        document.getElementById('mapSearchNoResults').style.display = 'none';
+        document.getElementById('mapSearchResultsList').innerHTML = '';
+        mapSearchResultsData = [];
+        
+        searchMapModal.show();
+        
+        // Focus on input
+        setTimeout(() => {
+            document.getElementById('searchMapInput').focus();
+        }, 500);
+    }
+}
+
+// Perform map search using Nominatim
+async function performMapSearch() {
+    const query = document.getElementById('searchMapInput').value.trim();
+    
+    if (!query) {
+        showToast('Wpisz nazwę obszaru do wyszukania', 'warning');
+        return;
+    }
+    
+    // Show loading
+    document.getElementById('mapSearchLoading').style.display = 'block';
+    document.getElementById('mapSearchResults').style.display = 'none';
+    document.getElementById('mapSearchNoResults').style.display = 'none';
+    
+    try {
+        // Bydgoszcz coordinates for proximity search
+        const bydgoszczLat = 53.1235;
+        const bydgoszczLon = 18.0084;
+        
+        // Search using Nominatim with viewbox around Poland, prioritizing areas near Bydgoszcz
+        const url = `https://nominatim.openstreetmap.org/search?` +
+            `q=${encodeURIComponent(query)}` +
+            `&format=json` +
+            `&limit=20` +
+            `&countrycodes=pl` +
+            `&addressdetails=1` +
+            `&polygon_geojson=1` +
+            `&viewbox=14.0,49.0,24.0,55.0` + // Poland bounds
+            `&bounded=0`;
+        
+        const response = await fetch(url);
+        const results = await response.json();
+        
+        if (results && results.length > 0) {
+            // Calculate distance from Bydgoszcz for each result
+            results.forEach(result => {
+                const lat = parseFloat(result.lat);
+                const lon = parseFloat(result.lon);
+                result.distanceFromBydgoszcz = calculateDistance(
+                    bydgoszczLat, bydgoszczLon, lat, lon
+                );
+            });
+            
+            // Sort by distance from Bydgoszcz
+            results.sort((a, b) => a.distanceFromBydgoszcz - b.distanceFromBydgoszcz);
+            
+            // Store results
+            mapSearchResultsData = results;
+            
+            // Display results
+            displayMapSearchResults(results);
+            
+            document.getElementById('mapSearchLoading').style.display = 'none';
+            document.getElementById('mapSearchResults').style.display = 'block';
+        } else {
+            document.getElementById('mapSearchLoading').style.display = 'none';
+            document.getElementById('mapSearchNoResults').style.display = 'block';
+        }
+    } catch (error) {
+        console.error('Error searching map:', error);
+        document.getElementById('mapSearchLoading').style.display = 'none';
+        showToast('Wystąpił błąd podczas wyszukiwania. Spróbuj ponownie.', 'error');
+    }
+}
+
+// Display map search results
+function displayMapSearchResults(results) {
+    const listContainer = document.getElementById('mapSearchResultsList');
+    listContainer.innerHTML = '';
+    
+    results.forEach((result, index) => {
+        const div = document.createElement('div');
+        div.className = 'search-result-list-item';
+        
+        // Build display name
+        let displayName = result.display_name;
+        
+        // Add distance info
+        const distanceKm = Math.round(result.distanceFromBydgoszcz);
+        const distanceInfo = distanceKm < 1 ? 'Bydgoszcz' : `${distanceKm} km od Bydgoszczy`;
+        
+        // Get type
+        const type = result.type || result.class || 'obszar';
+        
+        div.innerHTML = `
+            <strong>${result.name || displayName}</strong>
+            <div class="text-muted small">${displayName}</div>
+            <div class="text-primary small">📍 ${distanceInfo} • ${type}</div>
+        `;
+        
+        div.onclick = () => selectMapSearchResult(index);
+        
+        listContainer.appendChild(div);
+    });
+}
+
+// Select map search result and zoom to it
+function selectMapSearchResult(index) {
+    const result = mapSearchResultsData[index];
+    
+    if (!result) return;
+    
+    const lat = parseFloat(result.lat);
+    const lon = parseFloat(result.lon);
+    
+    // Close modal
+    if (searchMapModal) {
+        searchMapModal.hide();
+    }
+    
+    // Zoom to location
+    if (result.geojson) {
+        // If we have polygon data, fit bounds to it
+        const geoJsonLayer = L.geoJSON(result.geojson);
+        const bounds = geoJsonLayer.getBounds();
+        map.fitBounds(bounds, { padding: [50, 50] });
+        
+        // Add temporary highlight
+        const highlightLayer = L.geoJSON(result.geojson, {
+            style: {
+                color: '#ff0000',
+                weight: 3,
+                fillOpacity: 0.1
+            }
+        }).addTo(map);
+        
+        // Remove highlight after 3 seconds
+        setTimeout(() => {
+            map.removeLayer(highlightLayer);
+        }, 3000);
+    } else if (result.boundingbox) {
+        // Use bounding box
+        const bbox = result.boundingbox;
+        const bounds = [
+            [parseFloat(bbox[0]), parseFloat(bbox[2])],
+            [parseFloat(bbox[1]), parseFloat(bbox[3])]
+        ];
+        map.fitBounds(bounds, { padding: [50, 50] });
+    } else {
+        // Just center on coordinates
+        map.setView([lat, lon], 14);
+    }
+    
+    // Add temporary marker
+    const tempMarker = L.marker([lat, lon], {
+        icon: L.divIcon({
+            className: 'search-marker',
+            html: '📍',
+            iconSize: [30, 30]
+        })
+    }).addTo(map);
+    
+    // Remove marker after 3 seconds
+    setTimeout(() => {
+        map.removeLayer(tempMarker);
+    }, 3000);
+    
+    // Load areas in the new view after map settles
+    setTimeout(() => {
+        loadAreasInView();
+    }, 600);
+}
+
+// Calculate distance between two points (Haversine formula)
+function calculateDistance(lat1, lon1, lat2, lon2) {
+    const R = 6371; // Earth's radius in km
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+              Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
+}
+
+// ============== TOAST NOTIFICATIONS ==============
+
+let toastCounter = 0;
+
+// Show toast notification
+function showToast(message, type = 'info', duration = 4000) {
+    const toastId = `toast-${toastCounter++}`;
+    const container = document.getElementById('toastContainer');
+    
+    // Icon based on type
+    const icons = {
+        success: '✓',
+        error: '✕',
+        warning: '⚠',
+        info: 'ℹ'
+    };
+    
+    // Polish labels
+    const labels = {
+        success: 'Sukces',
+        error: 'Błąd',
+        warning: 'Ostrzeżenie',
+        info: 'Informacja'
+    };
+    
+    // Create toast element
+    const toastDiv = document.createElement('div');
+    toastDiv.id = toastId;
+    toastDiv.className = `toast custom-toast toast-${type}`;
+    toastDiv.setAttribute('role', 'alert');
+    toastDiv.setAttribute('aria-live', 'assertive');
+    toastDiv.setAttribute('aria-atomic', 'true');
+    
+    toastDiv.innerHTML = `
+        <div class="toast-header">
+            <strong class="me-auto">${icons[type]} ${labels[type]}</strong>
+            <button type="button" class="btn-close" data-bs-dismiss="toast"></button>
+        </div>
+        <div class="toast-body">
+            ${message}
+        </div>
+    `;
+    
+    container.appendChild(toastDiv);
+    
+    // Initialize and show toast
+    const toast = new bootstrap.Toast(toastDiv, {
+        autohide: true,
+        delay: duration
+    });
+    toast.show();
+    
+    // Remove element after it's hidden
+    toastDiv.addEventListener('hidden.bs.toast', () => {
+        toastDiv.remove();
+    });
+}
+
+// Show confirm dialog with custom styling
+function showConfirm(message, onConfirm, onCancel) {
+    const confirmId = `confirm-${toastCounter++}`;
+    const container = document.getElementById('toastContainer');
+    
+    const confirmDiv = document.createElement('div');
+    confirmDiv.id = confirmId;
+    confirmDiv.className = 'toast custom-toast toast-warning';
+    confirmDiv.setAttribute('role', 'alert');
+    confirmDiv.setAttribute('data-bs-autohide', 'false');
+    
+    confirmDiv.innerHTML = `
+        <div class="toast-header">
+            <strong class="me-auto">⚠ Potwierdzenie</strong>
+            <button type="button" class="btn-close" data-bs-dismiss="toast"></button>
+        </div>
+        <div class="toast-body">
+            <p>${message}</p>
+            <div class="d-flex gap-2 justify-content-end mt-2">
+                <button class="btn btn-sm btn-secondary" onclick="document.getElementById('${confirmId}').querySelector('.btn-close').click()">Anuluj</button>
+                <button class="btn btn-sm btn-danger" id="${confirmId}-confirm">Potwierdź</button>
+            </div>
+        </div>
+    `;
+    
+    container.appendChild(confirmDiv);
+    
+    const toast = new bootstrap.Toast(confirmDiv, { autohide: false });
+    toast.show();
+    
+    // Handle confirm button
+    document.getElementById(`${confirmId}-confirm`).addEventListener('click', () => {
+        toast.hide();
+        if (onConfirm) onConfirm();
+    });
+    
+    // Handle cancel/close
+    confirmDiv.addEventListener('hidden.bs.toast', () => {
+        confirmDiv.remove();
+        if (onCancel) onCancel();
+    });
+}
+
 
 
 

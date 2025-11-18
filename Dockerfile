@@ -13,6 +13,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Skopiuj całą aplikację
 COPY . .
 
+# Wygeneruj ikony PWA jeśli nie istnieją
+RUN python generate_icons.py || true
+
 # Utwórz katalog na bazę danych
 RUN mkdir -p /app/data
 
