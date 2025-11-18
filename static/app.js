@@ -758,6 +758,27 @@ function displayAllAreas() {
                 <span class="tooltip-label">Odmowy:</span>
                 <span class="tooltip-value">${totalRejections}</span>
             </div>`;
+            
+            // Find last entry with date and user
+            const lastEntry = locationLeadData.reduce((latest, ld) => {
+                return new Date(ld.date) > new Date(latest.date) ? ld : latest;
+            }, locationLeadData[0]);
+            
+            if (lastEntry) {
+                tooltipContent += `<div class="tooltip-row">
+                    <span class="tooltip-label">Ostatni wpis:</span>
+                    <span class="tooltip-value">${lastEntry.date}</span>
+                </div>`;
+                
+                // Find username for last entry
+                const lastUser = users.find(u => u.id === lastEntry.user_id);
+                if (lastUser) {
+                    tooltipContent += `<div class="tooltip-row">
+                        <span class="tooltip-label">Użytkownik:</span>
+                        <span class="tooltip-value">${lastUser.username}</span>
+                    </div>`;
+                }
+            }
         } else {
             tooltipContent += `<div class="tooltip-row">
                 <span class="tooltip-label text-muted">Brak danych</span>
@@ -1943,7 +1964,7 @@ function generateStatsUsers() {
     
     userStatsArray.forEach((stat, index) => {
         html += `
-            <tr>
+            <tr style="cursor: pointer;" onclick="showUserActionsMenu(${stat.userId}, '${stat.username}')">
                 <td>${index + 1}</td>
                 <td><strong>${stat.username}</strong></td>
                 <td>${stat.leads}</td>
@@ -1962,6 +1983,51 @@ function generateStatsUsers() {
     `;
     
     statsUsers.innerHTML = html;
+}
+
+// Show user actions menu (delete user and data)
+function showUserActionsMenu(userId, username) {
+    // Check if current user is admin or the same user
+    if (!currentUser) {
+        showToast('Musisz być zalogowany', 'warning');
+        return;
+    }
+    
+    showConfirm(
+        `Czy chcesz usunąć użytkownika "${username}" oraz wszystkie jego dane (lokalizacje, wpisy, rezerwacje)?<br><br><strong>Ta operacja jest nieodwracalna!</strong>`,
+        async () => {
+            await deleteUserAndData(userId, username);
+        }
+    );
+}
+
+// Delete user and all their data
+async function deleteUserAndData(userId, username) {
+    try {
+        const response = await fetch(`/api/users/${userId}`, {
+            method: 'DELETE'
+        });
+        
+        if (response.ok) {
+            showToast(`Użytkownik "${username}" i jego dane zostały usunięte`, 'success');
+            
+            // Reload all data
+            await loadUsers();
+            await loadLocations();
+            await loadLeadData();
+            await loadReservations();
+            
+            // Refresh stats
+            displayUserStats();
+            displayAllAreas();
+        } else {
+            const error = await response.json();
+            showToast(error.error || 'Błąd podczas usuwania użytkownika', 'error');
+        }
+    } catch (error) {
+        console.error('Error deleting user:', error);
+        showToast('Błąd podczas usuwania użytkownika', 'error');
+    }
 }
 
 // Show statistics for specific location

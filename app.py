@@ -323,6 +323,23 @@ def get_users():
         users = [dict(row) for row in cursor.fetchall()]
     return jsonify(users)
 
+@app.route('/api/users/<int:user_id>', methods=['DELETE'])
+@login_required
+def delete_user(user_id):
+    # Prevent deleting yourself
+    if current_user.id == user_id:
+        return jsonify({'error': 'Nie możesz usunąć swojego konta'}), 403
+    
+    with get_db() as conn:
+        # Delete all user's data in correct order (due to foreign keys)
+        conn.execute('DELETE FROM lead_data WHERE location_id IN (SELECT id FROM locations WHERE user_id = ?)', (user_id,))
+        conn.execute('DELETE FROM reservations WHERE user_id = ?', (user_id,))
+        conn.execute('DELETE FROM locations WHERE user_id = ?', (user_id,))
+        conn.execute('DELETE FROM users WHERE id = ?', (user_id,))
+        conn.commit()
+    
+    return jsonify({'message': 'User and all data deleted successfully'})
+
 if __name__ == '__main__':
     init_db()
     app.run(debug=True, host='0.0.0.0', port=5000)
