@@ -661,6 +661,11 @@ function displayAllAreas() {
     const bounds = map.getBounds();
     console.log(`Current map bounds:`, bounds.toBBoxString());
     
+    // Detect if device is mobile (touch-enabled) - once for all markers
+    const isMobile = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
+    const iconSize = isMobile ? 26 : 24; // 10% larger on mobile
+    const xSize = isMobile ? 32 : 29;
+    
     let displayedCount = 0;
     
     areasToDisplay.forEach((area, index) => {
@@ -718,17 +723,17 @@ function displayAllAreas() {
         let iconHtml;
         if (hasNoProspects) {
             // X marker for no prospects
-            iconHtml = `<div style="color: #dc3545; font-weight: bold; font-size: 29px; text-shadow: 0 0 3px white, 0 0 3px white;">✕</div>`;
+            iconHtml = `<div style="color: #dc3545; font-weight: bold; font-size: ${xSize}px; text-shadow: 0 0 3px white, 0 0 3px white;">✕</div>`;
         } else {
-            // Regular dot marker - 202.5% of original (12px -> 24px)
-            iconHtml = `<div style="background-color: ${markerColor}; width: 24px; height: 24px; border-radius: 50%; border: 4px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>`;
+            // Regular dot marker
+            iconHtml = `<div style="background-color: ${markerColor}; width: ${iconSize}px; height: ${iconSize}px; border-radius: 50%; border: 4px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>`;
         }
         
         const icon = L.divIcon({
             className: 'custom-marker',
             html: iconHtml,
-            iconSize: [24, 24],
-            iconAnchor: [12, 12]
+            iconSize: [iconSize, iconSize],
+            iconAnchor: [iconSize/2, iconSize/2]
         });
         
         // Create marker
@@ -767,16 +772,27 @@ function displayAllAreas() {
             className: 'custom-tooltip'
         });
         
-        // Left click - show tooltip (toggle)
-        marker.on('click', () => {
-            if (marker.isTooltipOpen()) {
-                marker.closeTooltip();
-            } else {
+        // Different behavior for desktop vs mobile
+        if (isMobile) {
+            // Mobile: tooltip only on click (touch)
+            marker.on('click', () => {
+                if (marker.isTooltipOpen()) {
+                    marker.closeTooltip();
+                } else {
+                    marker.openTooltip();
+                }
+            });
+        } else {
+            // Desktop: tooltip on hover (mouseover), click does nothing
+            marker.on('mouseover', () => {
                 marker.openTooltip();
-            }
-        });
+            });
+            marker.on('mouseout', () => {
+                marker.closeTooltip();
+            });
+        }
         
-        // Right click - add new data
+        // Right click - add new data (works on both desktop and mobile long-press)
         marker.on('contextmenu', (e) => {
             L.DomEvent.preventDefault(e);
             openLeadDataModalForArea(area, matchingLocation);
