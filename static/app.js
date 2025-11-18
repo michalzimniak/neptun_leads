@@ -769,21 +769,39 @@ function displayAllAreas() {
         marker.bindTooltip(tooltipContent, {
             permanent: false,
             direction: 'top',
-            className: 'custom-tooltip'
+            className: 'custom-tooltip',
+            interactive: true
         });
         
         // Different behavior for desktop vs mobile
         if (isMobile) {
-            // Mobile: tooltip only on click (touch)
-            marker.on('click', () => {
-                if (marker.isTooltipOpen()) {
-                    marker.closeTooltip();
-                } else {
-                    marker.openTooltip();
-                }
+            // Mobile: use tap event instead of click
+            let tapTimeout = null;
+            marker.on('touchstart', (e) => {
+                L.DomEvent.stopPropagation(e);
+                L.DomEvent.preventDefault(e);
+                
+                // Clear previous timeout
+                if (tapTimeout) clearTimeout(tapTimeout);
+                
+                // Close all other tooltips
+                Object.values(areaLayers).forEach(layer => {
+                    if (layer !== marker && layer.isTooltipOpen && layer.isTooltipOpen()) {
+                        layer.closeTooltip();
+                    }
+                });
+                
+                // Toggle this tooltip with slight delay
+                tapTimeout = setTimeout(() => {
+                    if (marker.isTooltipOpen()) {
+                        marker.closeTooltip();
+                    } else {
+                        marker.openTooltip();
+                    }
+                }, 50);
             });
         } else {
-            // Desktop: tooltip on hover (mouseover), click does nothing
+            // Desktop: tooltip on hover (mouseover)
             marker.on('mouseover', () => {
                 marker.openTooltip();
             });
