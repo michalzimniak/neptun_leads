@@ -718,17 +718,17 @@ function displayAllAreas() {
         let iconHtml;
         if (hasNoProspects) {
             // X marker for no prospects
-            iconHtml = `<div style="color: #dc3545; font-weight: bold; font-size: 32px; text-shadow: 0 0 3px white, 0 0 3px white;">✕</div>`;
+            iconHtml = `<div style="color: #dc3545; font-weight: bold; font-size: 29px; text-shadow: 0 0 3px white, 0 0 3px white;">✕</div>`;
         } else {
-            // Regular dot marker - 225% of original (12px -> 27px)
-            iconHtml = `<div style="background-color: ${markerColor}; width: 27px; height: 27px; border-radius: 50%; border: 4px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>`;
+            // Regular dot marker - 202.5% of original (12px -> 24px)
+            iconHtml = `<div style="background-color: ${markerColor}; width: 24px; height: 24px; border-radius: 50%; border: 4px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>`;
         }
         
         const icon = L.divIcon({
             className: 'custom-marker',
             html: iconHtml,
-            iconSize: [27, 27],
-            iconAnchor: [13.5, 13.5]
+            iconSize: [24, 24],
+            iconAnchor: [12, 12]
         });
         
         // Create marker
