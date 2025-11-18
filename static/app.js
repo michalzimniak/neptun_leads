@@ -1392,6 +1392,84 @@ async function saveLeadData() {
     }
 }
 
+// Reserve area from modal (manual reservation without saving lead data)
+async function reserveAreaFromModal() {
+    const locationId = parseInt(document.getElementById('leadLocationId').value);
+    const locationName = document.getElementById('leadLocationName').value;
+    const date = document.getElementById('leadDate').value;
+    
+    if (!date) {
+        showToast('Proszę podać datę rezerwacji', 'warning');
+        return;
+    }
+    
+    if (!currentUser) {
+        showToast('Musisz być zalogowany, aby dokonać rezerwacji', 'warning');
+        showLoginModal();
+        return;
+    }
+    
+    // Find the location to get coordinates
+    const location = locations.find(loc => loc.id === locationId);
+    if (!location) {
+        showToast('Nie znaleziono lokalizacji', 'error');
+        return;
+    }
+    
+    // Check if area is already reserved for this date
+    const alreadyReserved = reservations.some(r => 
+        r.area_name.toLowerCase() === locationName.toLowerCase() && 
+        r.reservation_date === date
+    );
+    
+    if (alreadyReserved) {
+        showToast('Ten obszar jest już zarezerwowany na wybrany dzień', 'warning');
+        return;
+    }
+    
+    // Ask for confirmation
+    showConfirm(
+        `Czy na pewno chcesz zarezerwować obszar "${locationName}" na dzień ${date}?`,
+        async () => {
+            await performReservation(location, locationName, date);
+        }
+    );
+}
+
+// Perform the actual reservation
+async function performReservation(location, locationName, date) {
+    try {
+        const response = await fetch('/api/reservations', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                area_name: locationName,
+                area_lat: location.lat,
+                area_lng: location.lng,
+                reservation_date: date
+            })
+        });
+        
+        if (response.ok) {
+            await loadReservations();
+            addLeadDataModal.hide();
+            showToast(`Obszar "${locationName}" zarezerwowany na ${date}`, 'success');
+            
+            // Open Google Maps with navigation
+            const mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${location.lat},${location.lng}&destination_place_id=${encodeURIComponent(locationName)}`;
+            window.open(mapsUrl, '_blank');
+        } else {
+            const error = await response.json();
+            showToast(error.error || 'Błąd podczas rezerwacji', 'error');
+        }
+    } catch (error) {
+        console.error('Error reserving area:', error);
+        showToast('Błąd podczas rezerwacji obszaru', 'error');
+    }
+}
+
 // Delete location
 async function deleteLocation() {
     const locationId = parseInt(document.getElementById('leadLocationId').value);
@@ -1484,6 +1562,7 @@ function showStats() {
     generateStatsByDate();
     generateStatsCharts();
     generateStatsUsers();
+    displayReservationsStats();
     
     statsModal.show();
 }
@@ -1506,6 +1585,7 @@ function applyStatsFilters() {
     generateStatsByDate();
     generateStatsCharts();
     generateStatsUsers();
+    displayReservationsStats();
 }
 
 // Get filtered data
@@ -1983,6 +2063,127 @@ function generateStatsUsers() {
     `;
     
     statsUsers.innerHTML = html;
+}
+
+// Display reservations stats
+function displayReservationsStats() {
+    const statsReservations = document.getElementById('statsReservations');
+    
+    if (!statsReservations) return;
+    
+    // Apply filters
+    let filteredReservations = [...reservations];
+    
+    // Filter by date range
+    if (statsFilters.dateFrom) {
+        filteredReservations = filteredReservations.filter(r => r.reservation_date >= statsFilters.dateFrom);
+    }
+    if (statsFilters.dateTo) {
+        filteredReservations = filteredReservations.filter(r => r.reservation_date <= statsFilters.dateTo);
+    }
+    
+    // Filter by location name
+    if (statsFilters.locationFilter) {
+        const filterLower = statsFilters.locationFilter.toLowerCase();
+        filteredReservations = filteredReservations.filter(r => 
+            r.area_name.toLowerCase().includes(filterLower)
+        );
+    }
+    
+    // Filter by user
+    if (statsFilters.userFilter) {
+        filteredReservations = filteredReservations.filter(r => 
+            r.user_id === parseInt(statsFilters.userFilter)
+        );
+    }
+    
+    // Sort by date descending
+    filteredReservations.sort((a, b) => new Date(b.reservation_date) - new Date(a.reservation_date));
+    
+    let html = `
+        <h4 class="mb-3">Rezerwacje obszarów</h4>
+        <p class="text-muted">Łącznie rezerwacji: ${filteredReservations.length}</p>
+        
+        <div class="table-responsive" style="max-height: 500px; overflow-y: auto;">
+            <table class="table table-striped table-hover">
+                <thead class="sticky-top bg-white">
+                    <tr>
+                        <th>Data</th>
+                        <th>Obszar</th>
+                        <th>Użytkownik</th>
+                        <th>Akcje</th>
+                    </tr>
+                </thead>
+                <tbody>
+    `;
+    
+    if (filteredReservations.length === 0) {
+        html += `
+            <tr>
+                <td colspan="4" class="text-center text-muted">Brak rezerwacji spełniających kryteria</td>
+            </tr>
+        `;
+    } else {
+        filteredReservations.forEach(reservation => {
+            const user = users.find(u => u.id === reservation.user_id);
+            const username = user ? user.username : 'Nieznany';
+            
+            html += `
+                <tr>
+                    <td><strong>${reservation.reservation_date}</strong></td>
+                    <td>${reservation.area_name}</td>
+                    <td><span class="badge bg-primary">${username}</span></td>
+                    <td>
+                        <button class="btn btn-sm btn-danger" onclick="deleteReservationFromStats(${reservation.id}, '${reservation.area_name}')">
+                            Usuń
+                        </button>
+                        <button class="btn btn-sm btn-success" onclick="navigateToReservation(${reservation.area_lat}, ${reservation.area_lng}, '${reservation.area_name}')">
+                            📍 Nawiguj
+                        </button>
+                    </td>
+                </tr>
+            `;
+        });
+    }
+    
+    html += `
+                </tbody>
+            </table>
+        </div>
+    `;
+    
+    statsReservations.innerHTML = html;
+}
+
+// Delete reservation from stats view
+async function deleteReservationFromStats(reservationId, areaName) {
+    showConfirm(
+        `Czy na pewno chcesz usunąć rezerwację dla "${areaName}"?`,
+        async () => {
+            try {
+                const response = await fetch(`/api/reservations/${reservationId}`, {
+                    method: 'DELETE'
+                });
+                
+                if (response.ok) {
+                    await loadReservations();
+                    displayReservationsStats();
+                    showToast('Rezerwacja została usunięta', 'success');
+                } else {
+                    showToast('Błąd podczas usuwania rezerwacji', 'error');
+                }
+            } catch (error) {
+                console.error('Error deleting reservation:', error);
+                showToast('Błąd podczas usuwania rezerwacji', 'error');
+            }
+        }
+    );
+}
+
+// Navigate to reservation area
+function navigateToReservation(lat, lng, areaName) {
+    const mapsUrl = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&destination_place_id=${encodeURIComponent(areaName)}`;
+    window.open(mapsUrl, '_blank');
 }
 
 // Show user actions menu (delete user and data)
