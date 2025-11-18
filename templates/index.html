@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neptun LEADs</title>
+    
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
+    
+    <style>
+        body {
+            padding: 0;
+            margin: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        #map {
+            height: calc(100vh - 56px);
+            width: 100%;
+        }
+        
+        .navbar {
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .modal-body label {
+            font-weight: 500;
+            margin-bottom: 0.5rem;
+        }
+        
+        .location-marker {
+            background-color: #0d6efd;
+            border: 2px solid white;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .location-marker:hover {
+            background-color: #0a58ca;
+            transform: scale(1.2);
+        }
+        
+        .tooltip-content {
+            padding: 10px;
+            min-width: 200px;
+        }
+        
+        .tooltip-header {
+            font-weight: bold;
+            font-size: 16px;
+            margin-bottom: 8px;
+            color: #0d6efd;
+        }
+        
+        .tooltip-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 4px 0;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        
+        .tooltip-row:last-child {
+            border-bottom: none;
+        }
+        
+        .tooltip-label {
+            font-weight: 500;
+        }
+        
+        .tooltip-value {
+            color: #666;
+        }
+        
+        .btn-add-location {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            z-index: 1000;
+            border-radius: 50%;
+            width: 60px;
+            height: 60px;
+            font-size: 24px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+        }
+        
+        .side-panel {
+            position: fixed;
+            top: 56px;
+            left: -400px;
+            width: 400px;
+            height: calc(100vh - 56px);
+            background: white;
+            box-shadow: 2px 0 10px rgba(0,0,0,0.3);
+            z-index: 1000;
+            transition: left 0.3s ease;
+            overflow-y: auto;
+            padding: 20px;
+        }
+        
+        .side-panel.open {
+            left: 0;
+        }
+        
+        .close-panel {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            cursor: pointer;
+            font-size: 24px;
+            color: #666;
+        }
+        
+        .search-result-item {
+            border: 2px solid #dee2e6;
+            border-radius: 8px;
+            padding: 10px;
+            margin-bottom: 10px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .search-result-item:hover {
+            border-color: #0d6efd;
+            background-color: #f8f9fa;
+        }
+        
+        .search-result-item.selected {
+            border-color: #0d6efd;
+            background-color: #e7f1ff;
+        }
+        
+        .geometry-layer {
+            cursor: pointer;
+        }
+        
+        .geometry-layer:hover {
+            fill-opacity: 0.4 !important;
+        }
+    </style>
+</head>
+<body>
+    <!-- Navbar -->
+    <nav class="navbar navbar-dark bg-primary">
+        <div class="container-fluid">
+            <span class="navbar-brand mb-0 h1">📍 Neptun LEADs</span>
+            <div id="navbarButtons">
+                <!-- Shown when logged in -->
+                <span id="loggedInSection" style="display: none;">
+                    <span class="text-white me-3">👤 <span id="currentUsername"></span></span>
+                    <button class="btn btn-success btn-sm me-2" onclick="showRandomAreaModal()">
+                        🎲 Losuj obszar
+                    </button>
+                    <button class="btn btn-light btn-sm me-2" onclick="showStats()">
+                        📊 Statystyki
+                    </button>
+                    <button class="btn btn-outline-light btn-sm" onclick="logout()">
+                        Wyloguj
+                    </button>
+                </span>
+                <!-- Shown when logged out -->
+                <span id="loggedOutSection">
+                    <button class="btn btn-light btn-sm me-2" onclick="showLoginModal()">
+                        Zaloguj się
+                    </button>
+                    <button class="btn btn-success btn-sm" onclick="showRegisterModal()">
+                        Zarejestruj się
+                    </button>
+                </span>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Map Container -->
+    <div id="map"></div>
+
+    <!-- Add Location Button (hidden - areas loaded automatically) -->
+    <button class="btn btn-primary btn-add-location" onclick="openAddLocationPanel()" title="Dodaj własną lokalizację" style="display: none;">
+        🔍
+    </button>
+
+    <!-- Side Panel for Adding Location -->
+    <div class="side-panel" id="addLocationPanel">
+        <span class="close-panel" onclick="closeAddLocationPanel()">&times;</span>
+        <h4 class="mb-4" id="panelTitle">Wyszukaj i dodaj lokalizację</h4>
+        
+        <!-- Search Section -->
+        <div class="mb-4">
+            <label for="locationSearch" class="form-label fw-bold">Wyszukaj nową lokalizację:</label>
+            <div class="input-group mb-2">
+                <input type="text" class="form-control" id="locationSearch" placeholder="np. Warszawa Mokotów...">
+                <button class="btn btn-primary" type="button" onclick="searchLocation()">Szukaj</button>
+            </div>
+            <small class="text-muted">Wyszukaj miejscowość lub osiedle, kliknij na wynik na mapie, aby dodać do swojej listy.</small>
+        </div>
+        
+        <!-- Search Results -->
+        <div id="searchResultsSection" style="display: none;">
+            <label class="form-label fw-bold">Wyniki wyszukiwania:</label>
+            <small class="text-muted d-block mb-2">Kliknij na wybrany obszar na mapie lub poniżej:</small>
+            <div id="searchResultsList"></div>
+            <button class="btn btn-sm btn-secondary mt-2" onclick="clearSearchResults()">Wyczyść wyniki</button>
+            <hr>
+        </div>
+        
+        <!-- Manual Drawing -->
+        <div class="mb-4">
+            <label class="form-label fw-bold">Lub narysuj własny obszar:</label>
+            <div class="d-grid gap-2">
+                <button class="btn btn-outline-primary btn-sm" onclick="enableDrawing('polygon')">📐 Rysuj wielokąt</button>
+                <button class="btn btn-outline-primary btn-sm" onclick="enableDrawing('circle')">⚫ Rysuj okrąg</button>
+                <button class="btn btn-outline-primary btn-sm" onclick="enableDrawing('marker')">📍 Postaw punkt</button>
+            </div>
+            <small class="text-muted d-block mt-2">Narysuj własny obszar na mapie, jeśli nie znajdziesz go w wyszukiwaniu.</small>
+        </div>
+        
+        <!-- Selected Location Info -->
+        <div id="selectedLocationInfo" style="display: none;">
+            <div class="alert alert-success">
+                <strong>✓ Wybrano obszar</strong><br>
+                <small id="selectedCoords"></small>
+            </div>
+            
+            <div class="mb-3">
+                <label for="locationName" class="form-label">Nazwa:</label>
+                <input type="text" class="form-control" id="locationName" required>
+            </div>
+            
+            <div class="mb-3">
+                <label for="locationType" class="form-label">Typ:</label>
+                <select class="form-select" id="locationType">
+                    <option value="city">Miejscowość</option>
+                    <option value="district">Osiedle</option>
+                </select>
+            </div>
+            
+            <div class="d-grid gap-2">
+                <button class="btn btn-success" onclick="saveLocation()">Zapisz lokalizację</button>
+                <button class="btn btn-outline-secondary" onclick="clearSelection()">Wyczyść wybór</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Add Lead Data -->
+    <div class="modal fade" id="addLeadDataModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Dodaj dane leadów</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <input type="hidden" id="leadLocationId">
+                    <div class="mb-3">
+                        <label class="form-label">Lokalizacja:</label>
+                        <input type="text" class="form-control" id="leadLocationName" readonly>
+                    </div>
+                    <div class="mb-3">
+                        <label for="leadDate" class="form-label">Data:</label>
+                        <input type="date" class="form-control" id="leadDate" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="leadsCount" class="form-label">Liczba leadów:</label>
+                        <input type="number" class="form-control" id="leadsCount" min="0" value="0" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="rejectionsCount" class="form-label">Liczba odmów:</label>
+                        <input type="number" class="form-control" id="rejectionsCount" min="0" value="0" required>
+                    </div>
+                    <div class="mb-3">
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" id="noProspects" style="width: 3em; height: 1.5em;">
+                            <label class="form-check-label ms-2" for="noProspects">
+                                <strong>Brak rokowań na LEADy</strong>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Anuluj</button>
+                    <button type="button" class="btn btn-primary" onclick="saveLeadData()">Zapisz</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Statistics -->
+    <div class="modal fade" id="statsModal" tabindex="-1">
+        <div class="modal-dialog modal-xl">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Statystyki i analizy</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <!-- Filters -->
+                    <div class="row mb-4">
+                        <div class="col-md-3">
+                            <label class="form-label">Zakres dat:</label>
+                            <div class="input-group input-group-sm">
+                                <input type="date" class="form-control" id="statsDateFrom">
+                                <span class="input-group-text">-</span>
+                                <input type="date" class="form-control" id="statsDateTo">
+                            </div>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Filtruj lokalizacje:</label>
+                            <input type="text" class="form-control form-control-sm" id="statsLocationFilter" placeholder="Wpisz nazwę...">
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Filtruj użytkownika:</label>
+                            <select class="form-select form-select-sm" id="statsUserFilter">
+                                <option value="">Wszyscy użytkownicy</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">&nbsp;</label>
+                            <div>
+                                <button class="btn btn-primary btn-sm w-100" onclick="applyStatsFilters()">Zastosuj filtry</button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Tabs -->
+                    <ul class="nav nav-tabs mb-3" id="statsTabs" role="tablist">
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link active" id="overview-tab" data-bs-toggle="tab" data-bs-target="#overview" type="button">Podsumowanie</button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="bydate-tab" data-bs-toggle="tab" data-bs-target="#bydate" type="button">Podział na daty</button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="charts-tab" data-bs-toggle="tab" data-bs-target="#charts" type="button">Wykresy</button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="users-tab" data-bs-toggle="tab" data-bs-target="#users" type="button">Użytkownicy</button>
+                        </li>
+                    </ul>
+                    
+                    <!-- Tab Content -->
+                    <div class="tab-content" id="statsTabContent">
+                        <!-- Overview Tab -->
+                        <div class="tab-pane fade show active" id="overview" role="tabpanel">
+                            <div id="statsOverview"></div>
+                        </div>
+                        
+                        <!-- By Date Tab -->
+                        <div class="tab-pane fade" id="bydate" role="tabpanel">
+                            <div id="statsByDate"></div>
+                        </div>
+                        
+                        <!-- Charts Tab -->
+                        <div class="tab-pane fade" id="charts" role="tabpanel">
+                            <div id="statsCharts">
+                                <canvas id="trendsChart" style="max-height: 400px;"></canvas>
+                            </div>
+                        </div>
+                        
+                        <!-- Users Tab -->
+                        <div class="tab-pane fade" id="users" role="tabpanel">
+                            <div id="statsUsers"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Random Area -->
+    <div class="modal fade" id="randomAreaModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header bg-success text-white">
+                    <h5 class="modal-title">🎲 Losowanie obszaru</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="randomRadius" class="form-label">Maksymalna odległość od Bydgoszczy (km):</label>
+                        <input type="number" class="form-control" id="randomRadius" min="1" max="200" value="50">
+                        <small class="text-muted">Domyślnie: 50 km</small>
+                    </div>
+                    
+                    <div class="mb-3">
+                        <label for="randomMonths" class="form-label">Brak wpisów od (miesięcy):</label>
+                        <input type="number" class="form-control" id="randomMonths" min="1" max="24" value="3">
+                        <small class="text-muted">Preferowane obszary bez wpisów od określonej liczby miesięcy</small>
+                    </div>
+                    
+                    <div class="alert alert-info">
+                        <strong>Kryteria losowania:</strong>
+                        <ul class="mb-0 mt-2">
+                            <li>Obszary w określonym promieniu od Bydgoszczy</li>
+                            <li>Brak wpisów od wybranej liczby miesięcy</li>
+                            <li>Brak oznaczenia "Brak rokowań"</li>
+                            <li>Preferencja dla obszarów z dobrymi wynikami w przeszłości</li>
+                            <li>Wykluczenie obszarów zarezerwowanych na dzisiejszy dzień</li>
+                        </ul>
+                    </div>
+                    
+                    <div id="randomResult" style="display: none;" class="alert alert-success">
+                        <h6 class="alert-heading">Wylosowano obszar:</h6>
+                        <p class="mb-1"><strong id="randomAreaName"></strong></p>
+                        <p class="mb-2"><small id="randomAreaInfo"></small></p>
+                        <div class="mb-2">
+                            <label for="reservationDate" class="form-label">Zarezerwuj na dzień:</label>
+                            <input type="date" class="form-control form-control-sm" id="reservationDate">
+                        </div>
+                        <button class="btn btn-primary btn-sm" onclick="makeReservation()">Zarezerwuj obszar</button>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Zamknij</button>
+                    <button type="button" class="btn btn-success" onclick="performRandomSelection()">🎲 Losuj</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Login -->
+    <div class="modal fade" id="loginModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Logowanie</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="loginUsername" class="form-label">Nazwa użytkownika:</label>
+                        <input type="text" class="form-control" id="loginUsername" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="loginPassword" class="form-label">Hasło:</label>
+                        <input type="password" class="form-control" id="loginPassword" required>
+                    </div>
+                    <div id="loginError" class="alert alert-danger" style="display: none;"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Anuluj</button>
+                    <button type="button" class="btn btn-primary" onclick="login()">Zaloguj</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Register -->
+    <div class="modal fade" id="registerModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Rejestracja</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="registerUsername" class="form-label">Nazwa użytkownika:</label>
+                        <input type="text" class="form-control" id="registerUsername" required>
+                        <small class="text-muted">Minimum 3 znaki</small>
+                    </div>
+                    <div class="mb-3">
+                        <label for="registerPassword" class="form-label">Hasło:</label>
+                        <input type="password" class="form-control" id="registerPassword" required>
+                        <small class="text-muted">Minimum 6 znaków</small>
+                    </div>
+                    <div class="mb-3">
+                        <label for="registerPasswordConfirm" class="form-label">Potwierdź hasło:</label>
+                        <input type="password" class="form-control" id="registerPasswordConfirm" required>
+                    </div>
+                    <div id="registerError" class="alert alert-danger" style="display: none;"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Anuluj</button>
+                    <button type="button" class="btn btn-success" onclick="register()">Zarejestruj</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+    
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    
+    <!-- App JS -->
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

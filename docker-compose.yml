@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  neptun-leads:
+    build: .
+    container_name: neptun-leads-app
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./data:/app/data
+      - ./leads.db:/app/leads.db
+    environment:
+      - FLASK_ENV=production
+      - FLASK_APP=app.py
+    restart: unless-stopped
+    networks:
+      - neptun-network
+
+networks:
+  neptun-network:
+    driver: bridge
+
+volumes:
+  data:
